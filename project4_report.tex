@@ -1,0 +1,145 @@
+\documentclass[letterpaper, 11pt]{amsart}
+
+\usepackage{fullpage}
+\usepackage{graphicx}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{float}
+\usepackage{color}
+\usepackage[colorlinks=true,linkcolor=red,citecolor=blue,urlcolor=cyan]{hyperref}
+
+\definecolor{crimsonred}{RGB}{190,0,0}
+\definecolor{granitepeak}{RGB}{117,142,153}
+\definecolor{lakecolor}{RGB}{58,191,192}
+
+\newcommand{\red}[1]{\textcolor{crimsonred}{#1}}
+\newcommand{\DAR}[1]{\textcolor{granitepeak}{#1}}
+\newcommand{\replace}[1]{\textcolor{lakecolor}{#1}}
+\newcommand{\BO}[1]{\textcolor{blue}{\small {\sf BO:\@ #1}}}
+
+\begin{document}
+
+\noindent {\bf {Bode Packer} \\ 
+Math 5750/6880: Mathematics of Data Science \\  
+Project \#4 Final Report \\ 
+\today \\ }
+
+\noindent {My GitHub Project4 repository is located here:
+\begin{center}
+\url{https://github.com/bodePacker/Math-for-DS-A4}
+\end{center}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Exploratory Analysis}
+
+For this project I worked with the PulseDB dataset, which is a large benchmark dataset built from MIMIC-III and VitalDB for studying cuff-less blood pressure estimation. The dataset is pretty massive, the training set alone has 465,480 samples from 1,293 unique subjects, with each subject contributing 360 samples. The test set (CalBased Test) has 51,720 samples from the same subjects but only 40 samples each. Each of these samples contains three signals with 1,250 time points each. An ECG (electrocardiogram), PPG (photoplethysmogram), and ABP (arterial blood pressure). After doing some background research, the ECG captures the electrical activity of the heart, and shows the characteristic QRS complexes. The PPG measures changes in blood volume optically and shows nice, viewable waveforms. Finally, the ABP is what we want to actually predict.
+
+Looking at the patient demographics in this dataset, the average age is about 59 years old with a standard deviation of 15 years, ranging from infants (0.4 years) up to 92 years old. The dataset is slightly skewed toward males (57.7\% vs 42.3\% female). BMI averages 22.9 kg/m$^2$, which is a pretty normal range, though subjects range from underweight (12.4) to obese (40.3).
+
+For blood pressure, the systolic values (SBP) average 115.5 mmHg with a standard deviation of 18.9 mmHg. The range is quite wide, going from 38.5 to 286.6 mmHg. This should cover everything from hypotensive to severely hypertensive cases. The diastolic blood pressure (DBP) averages 62.9 mmHg with a standard deviation of 12.1 mmHg, ranging from 16.2 to 276.9 mmHg. This wide range should be  great for training predictive models since we get exposure to a full spectrum of physical conditions. I also computed the correlation matrix for the patient features, just to see how the blood information correlated to the other information contained in the dataset. As expected, height, Weight, and BMI are strongly correlated with each other. SBP and DBP show a moderate positive correlation of about 0.62, which makes sense since both are measuring blood pressure. Age shows a weak positive correlation with blood pressure, which also makes sense, as blood pressure often gets higher as you age.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\section{Blood Pressure Prediction}
+\subsection{Background Info}
+The main task here was to build regression models that predict systolic and diastolic blood pressure (SBP and DBP) from the raw ECG and PPG signals. Following the approach suggested in the PulseDB paper, I started with a simple linear model to establish a baseline and then progressively increased model complexity to see how much improvement I could achieve. All models were trained on the full training set (465,480 samples) and evaluated on the CalBased test set (51,720 samples). For evaluation, I used the four metrics defined in the PulseDB paper. Those were Mean Error (ME), which measures systematic bias, Standard Deviation of Error (SDE), which captures prediction variability, Mean Absolute Error (MAE), which gives the average magnitude of errors, and R$^2$, the coefficient of determination that tells us what fraction of variance our model explains. ME close to zero means unbiased predictions, while lower SDE and MAE with higher R$^2$ indicate better overall performance.
+Looking at data prep, for the baseline models (Ridge Regression and MLP), I couldn't feed in the raw 1,250-point signals directly. I attempted that, but it had too many input features for a linear model and produced almost pure noise as output. Instead, I extracted 16 statistical features from each signal pair. For both the ECG and PPG signals, I computed the mean, standard deviation, minimum, maximum, range, median, and the 25th and 75th percentiles. These features capture the basic shape and distribution of each signal without requiring the model to learn temporal patterns. After extraction, I standardized all features using z-score normalization to help with model convergence.
+
+\subsection{Model Architectures and Training}
+
+ \textbf{Ridge Regression:} This was my baseline linear model using L2 regularization with $\alpha=1.0$. I trained separate Ridge models for SBP and DBP prediction. The model achieved an MAE of 14.14 mmHg for SBP and 8.97 mmHg for DBP, with R$^2$ values around 0.10-0.11. These numbers aren't great, but that's actually informative as it tells us that the relationship between simple statistical features and blood pressure is non-linear. A linear combination of signal statistics cannot capture the complex relationships between ECG, PPG, and ABP.
+
+\textbf{Simple MLP:} To try and more effectively capture the nonlinear relationships, I built a fully connected neural network with 4 hidden layers (256$\rightarrow$128$\rightarrow$64$\rightarrow$32 neurons). Each hidden layer uses batch normalization for training stability and ReLU activation for nonlinearity, with dropout (0.3 in early layers, 0.2 in later layers) to prevent overfitting. The output layer has 2 neurons for joint SBP/DBP prediction. I trained this for 40 epochs using the Adam optimizer with a learning rate of 0.001 and a batch size of 256. The MLP improved things quite a bit compared to the basic regression model. The MAE dropped to 12.84 mmHg for SBP and 8.34 mmHg for DBP, with R$^2$ around 0.22-0.24. This is about a 10\% improvement over Ridge, in which the NN + RELU helped capture nonlinear relationships that Ridge completely misses.
+
+\textbf{1D CNN:} For the convolutional model, I moved away from hand crafted features and fed in the raw signals directly. The input is a 2-channel tensor (ECG and PPG stacked together), each normalized per sample to zero mean and unit variance. My architecture used four convolutional blocks with increasing channel sizes (32$\rightarrow$64$\rightarrow$128$\rightarrow$256), each containing a Conv1D layer, batch normalization, ReLU activation, and max pooling. The final block uses adaptive average pooling to get a fixed size representation regardless of input length, followed by fully connected layers for prediction. I trained this on a subsampled version of the training data (every 2nd sample, so about 232,000 samples) for 50 epochs with learning rate scheduling.  The CNN turned out to be my best-performing model, achieving an MAE of 8.13 mmHg for SBP and 6.15 mmHg for DBP, with impressive R$^2$ values of 0.68 for SBP and 0.56 for DBP. As I mentioned in class, the transformer was initially much better, but as I reduced the sampling rate and provided the models with more data, the CNN pulled ahead. It does show a slight positive bias (ME = 1.77 mmHg for SBP, 1.02 mmHg for DBP), meaning it tends to slightly overestimate blood pressure, but this is much smaller than other models.
+
+\textbf{Transformer:} I also implemented an improved transformer architecture specifically designed for time-series regression. Rather than applying attention directly to the raw 1,250-point sequence (which would be computationally expensive and hard to train), I first used convolutional embedding layers to downsample the signal to 50 time steps while extracting local features. The embedded sequence then gets sinusoidal positional encoding (as seen in some time series transformer tutorials) before passing through 3 transformer encoder layers with 4 attention heads, 64-dimensional embeddings, and a GELU activation. For the final prediction, I concatenate global average pooling and max pooling of the encoder output, then pass it through fully connected layers. I trained this for 50 epochs using AdamW optimizer with weight decay of 0.01, and gradient clipping. Interestingly, while the Transformer achieved good R$^2$ values (0.54 for SBP, 0.47 for DBP), it showed significant negative bias with ME of -6.85 mmHg for SBP and -4.44 mmHg for DBP, meaning it consistently underestimated blood pressure. The MAE was 10.00 mmHg for SBP and 6.76 mmHg for DBP. Despite the attention mechanism's ability to capture long-range dependencies, the CNN actually outperformed it on this task. y guess as for why is, possibly because local convolutional features are more important for blood pressure estimation than global attention patterns. This finding, that the CNN performs better than the transformer, also aligns with the findings of the PulseDB paper.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{bp_all_models_comparison.png}
+\caption{True vs. predicted blood pressure for all four models. Top row shows SBP predictions, bottom row shows DBP. The diagonal dashed line represents perfect prediction. You can see the scatter tightening and centering on the diagonal as model complexity increases from Ridge (left) to Transformer (right).}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{bp_metrics_comparison.png}
+\caption{Comparison of model performance metrics across all four models. The Transformer achieves the best R$^2$ and lowest MAE for both SBP and DBP, while maintaining low bias (ME close to zero). Notice how DBP is generally easier to predict than SBP across all models.}
+\end{figure}
+
+\subsection{Discussion}
+
+The progression from Ridge to CNN shows dramatic improvement in predictive performance. The R$^2$ for SBP prediction improves from 0.10 (Ridge) to 0.24 (MLP) to 0.68 (CNN), proves that blood pressure clearly does have some relation to the ECG and PPG data, as the R$^2$ had a roughly a 7x improvement over the baseline. The CNN's success suggests that local convolutional features extracted from the raw signals are highly informative for blood pressure estimation.
+
+Interestingly, the Transformer did not outperform the CNN despite its ability to capture long range dependencies through self-attention. This shocked me as it was initially the best performing model by a wide margin, but as more data was added, CNN pulled ahead. The Transformer achieved R$^2$ of 0.54 for SBP, which is good but lower than the CNN's 0.68. More concerning, the Transformer showed significant negative bias (-6.85 mmHg for SBP), underestimating blood pressure repeatedly. I was unable to find why this was occurring, but this suggests that for this particular task, the local patterns captured by convolutions are more predictive than the global attention patterns. The physiological relationship between ECG/PPG signals and blood pressure may be more localized, with features like pulse wave morphology, peak shapes, and timing within individual heartbeats mattering more than relationships across distant parts of the signal.
+
+The CNN's MAE of 8.13 mmHg for SBP is still above clinical accuracy standards (which typically requires $<$4 mmHg, which I discovered upon talking to my partner, who is a cardiac nurse!), but it's a significant improvement over the baseline models. DBP prediction is generally easier across all models, likely because diastolic pressure has lower variance in the dataset and may have a more straightforward relationship with the input signals. The original PulseDB paper notes that even state-of-the-art methods struggle to achieve clinical-grade accuracy on this benchmark, so our CNN results are quite good given our investment.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\section{Generative Modeling}
+
+For this section, I developed generative models for ABP signals to understand their dimensionality and generate synthetic waveforms.
+
+\subsection{PCA Analysis}
+
+I started with Principal Component Analysis on 23,274 ABP signals to understand the linear dimensionality. Each signal has 1,250 time points, so the baseline dimension is pretty high.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{pca_elbow_analysis.png}
+\caption{PCA elbow analysis. The scree plot (top left) shows variance per component dropping off rapidly. The cumulative variance plot (top right) shows we need 59 components for 95\% variance. The log-scale plot (bottom left) gives a cleaner view of the elbow. The bottom right shows what the first 5 principal components look like---they capture different waveform patterns.}
+\end{figure}
+
+The PCA results show that 41 components capture 90\% of the variance, 59 components capture 95\%, and 121 components are needed for 99\%. So the linear dimension is around 59 if we use the standard 95\% threshold. I also found the principal components themselves are interesting, as they look like different waveform patterns that combine together to reconstruct the original signals.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{pca_reconstruction_comparison.png}
+\caption{PCA reconstruction at different latent dimensions. With 5 components, the reconstruction is pretty rough. By 50 components, it looks nearly identical to the original.}
+\end{figure}
+
+\subsection{Autoencoder Analysis}
+
+Next I trained a 1D convolutional autoencoder to learn a nonlinear compressed representation. The encoder uses 5 conv blocks that progressively downsample the signal, ending in a fully connected bottleneck. The decoder mirrors this architecture with opposite convolutions. To find the right latent dimension, I trained autoencoders with dimensions ranging from 4 to 128 and looked at validation MSE. The elbow analysis suggested a latent dimension of 16 as the sweet spot, and going much higher gave diminishing returns.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{ae_elbow_analysis.png}
+\caption{Autoencoder elbow analysis. The MSE vs latent dimension plot (left) shows the elbow around 16 dimensions. The comparison bar chart (right) highlights how different PCA and autoencoder estimates are.}
+\end{figure}
+
+This is a cool, but understandable result in which PCA says we need 59 dimensions, but the autoencoder only needs 16, which is a 3.7x reduction! The autoencoder achieves this better compression ratio as it learns nonlinear representations. The ABP signals have complex features like the notch towards the bottom and varying peak shapes that are hard to capture with linear combinations but easy for an autoencoder to encode consistently.
+
+\subsection{Signal Generation}
+
+With the trained autoencoder, I generated new ABP signals by sampling from the latent space. I fit a multivariate Gaussian to the latent vectors from training data, then sampled new latent vectors and decoded them.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{abp_generation_results.png}
+\caption{Signal reconstruction and generation. Top row: original signals. Second row: reconstructed signals (pretty accurate). Bottom two rows: generated signals from random latent space samples.}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{abp_original_vs_generated.png}
+\caption{Side-by-side comparison of original (top) vs generated (bottom) ABP signals with statistics shown. The generated signals have similar statistical properties and look physically plausible.}
+\end{figure}
+
+The generated signals look pretty good. They have the characteristic systolic peaks, dicrotic notches, and appropriate temporal structure. (It was at this point I looked up the names of each part of the waves and committed them to memory!) The average statistics (mean, std, min, max) across the generated signals are similar to real signals.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{latent_space_analysis.png}
+\caption{Latent space visualization using t-SNE. Blue points are training data, red stars are generated samples. The generated samples fall within the manifold of real data, indicating successful generation.}
+\end{figure}
+
+The t-SNE plot confirms that the generated samples fall within the distribution of real training data, which is what we want from a generative model.
+
+\subsection{Summary}
+
+The takeaway from the generative modeling section is that ABP signals have an intrinsic nonlinear dimension of about 16, which is much lower than what PCA suggests (59 dimensions). This highlights the power of autoencoders for compression of non linear data. The autoencoder is able to discover compact, meaningful representations that linear methods miss. The decoder successfully generates realistic-looking ABP waveforms from this 16-dimensional space, which is great news for scaling models in this space using fake but realistic data.  
+
+\end{document}
